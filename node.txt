@@ -1,0 +1,225 @@
+conda create --name PROJECT_YOLO python=3.11 
+
+conda activate PROJECT_YOLO # เข้า environment
+conda deactivate              # ออกจาก environment
+conda env list                # ดู environment ทั้งหมด
+
+# 2. ติดตั้ง PyTorch
+pip install torch torchvision torchaudio
+
+# 3. ติดตั้ง library ที่เหลือ
+pip install ultralytics opencv-python requests numpy python-dotenv
+
+pip install lap
+
+
+pip install psycopg2-binary 
+
+
+
+
+
+
+
+# ระบบแจ้งเตือนพฤติกรรมเสี่ยงผู้ป่วยอัลไซเมอร์
+
+ตรวจจับการออกนอกพื้นที่ของผู้ป่วยด้วย YOLOv8 + OpenCV  
+แจ้งเตือนผ่าน Email แบบ Real-time พร้อมบันทึกลง PostgreSQL
+
+---
+
+## โครงสร้างโปรเจกต์
+
+```
+alzheimer-monitor/
+├── main.py          ← รัน loop หลัก
+├── config.py        ← ค่าตั้งต้นทั้งหมด (แก้ที่นี่)
+├── database.py      ← PostgreSQL
+├── notifier.py      ← Email แจ้งเตือน
+├── geofencing.py    ← ตรวจพื้นที่ + วาดภาพ
+├── tracker.py       ← ติดตามคนและจับเวลา
+├── requirements.txt
+├── .env.example     ← ตัวอย่างไฟล์ .env
+└── .gitignore
+```
+
+---
+
+## ความต้องการของระบบ
+
+- Python 3.11
+- Anaconda หรือ Miniconda
+- PostgreSQL (ติดตั้งและรันอยู่)
+- กล้องวงจรปิด หรือ Webcam หรือไฟล์วิดีโอ .mp4
+
+---
+
+## ขั้นตอนการติดตั้ง
+
+### ขั้นที่ 1 — Clone โปรเจกต์
+
+```bash
+git clone https://github.com/username/alzheimer-monitor.git
+cd alzheimer-monitor
+```
+
+### ขั้นที่ 2 — สร้าง Conda Environment
+
+```bash
+conda create --name PROJECT_YOLO python=3.11
+conda activate PROJECT_YOLO
+```
+
+### ขั้นที่ 3 — ติดตั้ง Library ทั้งหมด
+
+```bash
+pip install torch torchvision torchaudio
+pip install ultralytics opencv-python requests numpy python-dotenv
+pip install lap
+pip install psycopg2-binary
+```
+
+### ขั้นที่ 4 — ตั้งค่าไฟล์ .env
+
+```bash
+cp .env.example .env
+```
+
+เปิดไฟล์ `.env` แล้วใส่ข้อมูลจริง
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+EMAIL_USER=อีเมลที่จะส่ง@gmail.com
+EMAIL_PASS=xxxx xxxx xxxx xxxx
+EMAIL_TO=อีเมลผู้ดูแล@gmail.com
+
+PG_HOST=localhost
+PG_PORT=5432
+PG_USER=postgres
+PG_PASS=รหัสผ่าน PostgreSQL
+PG_DB=alzheimer_db
+```
+
+> หมายเหตุ: EMAIL_PASS ต้องเป็น App Password จาก Google ไม่ใช่รหัส Gmail ปกติ  
+> ขอได้ที่ myaccount.google.com → Security → App passwords
+
+### ขั้นที่ 5 — สร้าง Database ใน PostgreSQL
+
+```bash
+psql -U postgres -c "CREATE DATABASE alzheimer_db;"
+```
+
+หรือสร้างผ่าน pgAdmin โดย คลิกขวาที่ Databases → Create → Database → ตั้งชื่อ alzheimer_db → Save
+
+### ขั้นที่ 6 — ตั้งค่า config.py
+
+เปิดไฟล์ `config.py` แล้วแก้ค่าตามสภาพแวดล้อมจริง
+
+```python
+# กล้อง: 0 = webcam, หรือใส่ path วิดีโอ
+CAMERA_SOURCE = 0
+# หรือ
+CAMERA_SOURCE = "video/myvideo.mp4"
+
+# พิกัด Safe Zone (ปรับให้ตรงกับกล้องจริง)
+# วิธีหาพิกัด: รันโปรแกรมก่อน ดูขนาดภาพที่ print ออกมา
+# แล้วค่อยกำหนดพิกัดให้เหมาะสม
+SAFE_ZONE_POLYGON = np.array([
+    [100, 100],   # มุมบนซ้าย
+    [860, 100],   # มุมบนขวา
+    [860, 440],   # มุมล่างขวา
+    [100, 440],   # มุมล่างซ้าย
+], dtype=np.int32)
+```
+
+---
+
+## วิธีรันโปรแกรม
+
+```bash
+conda activate PROJECT_YOLO
+python main.py
+```
+
+กด `Q` เพื่อหยุดโปรแกรม
+
+---
+
+## การทำงานของระบบ
+
+```
+เปิดกล้อง
+    ↓
+YOLO ตรวจจับคน + ByteTrack กำหนด ID
+    ↓
+เช็คว่าจุดเท้าอยู่นอก Safe Zone ไหม
+    ↓
+ถ้าอยู่นอก → จับเวลา (ต้องนานกว่า 4 วินาที)
+    ↓
+ครบ 4 วินาที → บันทึกภาพ + บันทึก DB + ส่ง Email
+```
+
+---
+
+## ดูข้อมูลใน Database
+
+เปิด pgAdmin → alzheimer_db → Schemas → public → Tables → events  
+คลิกขวาที่ events → View/Edit Data → All Rows
+
+หรือดูผ่าน Python
+
+```bash
+python -c "from database import get_recent_events; [print(e) for e in get_recent_events()]"
+```
+
+---
+
+## แก้ปัญหาที่พบบ่อย
+
+**กล้องเปิดไม่ได้**
+```bash
+# เช็คว่าไฟล์วิดีโออยู่ถูกที่ไหม
+ls video/
+# หรือเช็ค webcam
+python -c "import cv2; print(cv2.VideoCapture(0).isOpened())"
+```
+
+**ต่อ PostgreSQL ไม่ได้**
+```bash
+# เช็คว่า PostgreSQL รันอยู่ไหม (Mac)
+brew services list | grep postgresql
+# ถ้าไม่รัน
+brew services start postgresql@14
+```
+
+**lap ไม่ได้ติดตั้ง**
+```bash
+conda activate PROJECT_YOLO
+pip install lap
+```
+
+**เส้นหยักใต้ dotenv ใน VS Code**
+กด Cmd+Shift+P → Python: Select Interpreter → เลือก PROJECT_YOLO
+
+---
+
+## เทคโนโลยีที่ใช้
+
+| Library | เวอร์ชัน | หน้าที่ |
+|---|---|---|
+| Python | 3.11 | ภาษาหลัก |
+| ultralytics | 8.x | YOLOv8 ตรวจจับคน |
+| opencv-python | 4.8.x | ประมวลผลภาพ |
+| torch | 2.x | GPU acceleration (MPS/CUDA) |
+| psycopg2-binary | 2.x | เชื่อมต่อ PostgreSQL |
+| python-dotenv | 1.x | อ่านไฟล์ .env |
+| lap | 0.5.x | ByteTrack dependency |
+
+---
+
+## Hardware ที่รองรับ
+
+- **Mac Apple Silicon (M1/M2/M3)** — ใช้ MPS GPU อัตโนมัติ
+- **Windows/Linux + NVIDIA GPU** — ใช้ CUDA อัตโนมัติ
+- **CPU ทั่วไป** — รันได้ แต่ช้ากว่า
