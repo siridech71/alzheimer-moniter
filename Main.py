@@ -1,171 +1,94 @@
-"""
-main.py — จุดเริ่มต้นของโปรแกรม (Main Loop เท่านั้น)
-
-โครงสร้างโปรเจกต์:
-    main.py         <- ไฟล์นี้ รัน loop หลัก
-    config.py       <- ค่าตั้งต้นทั้งหมด (แก้ SAFE_ZONE_POLYGON ที่นี่)
-    database.py     <- บันทึก/ดึงข้อมูล PostgreSQL
-    notifier.py     <- ส่งแจ้งเตือน Email
-    geofencing.py   <- ตรวจพื้นที่ + วาดภาพ
-    tracker.py      <- ติดตามคนและจับเวลา
-
-รันด้วย:
-    python main.py
-    กด Q เพื่อหยุด
-"""
-
 import cv2
 import torch
 import time
-import numpy as np
 from ultralytics import YOLO
+from config import Config
+import database
+import geofencing
+import tracker
+import notifier
 
-from config import (
-    CAMERA_SOURCE,
-    CONFIDENCE_THRESHOLD,
-    YOLO_MODEL,
-    ANALYZE_EVERY_N_FRAMES,
-)
-from database import init_db, save_event
-from notifier import send_line_notify, can_send_alert, _last_alert_time
-from geofencing import is_outside_safe_zone, draw_overlay
-from tracker import PersonTracker
+# คลิกเมาส์ที่หน้าจอเพื่อหาพิกัด XY สำหรับแก้ใน Config
+def on_mouse(event, x, y, flags, param):
+    if event == cv2.EVENT_LBUTTONDOWN:
+        print(f"Coordinate: ({x}, {y})")
 
-
-def get_device() -> str:
-    """
-    เลือก device ที่เร็วที่สุดที่มีในเครื่อง
-    1. MPS  = Apple Silicon GPU (M1/M2/M3)
-    2. CUDA = NVIDIA GPU
-    3. CPU  = ใช้ได้ทุกเครื่อง แต่ช้าสุด
-    """
-    if torch.backends.mps.is_available():
-        print("[Device] ใช้ Apple GPU (MPS)")
-        return "mps"
+def main():
+    database.init_db()
     if torch.cuda.is_available():
-        print(f"[Device] ใช้ NVIDIA GPU: {torch.cuda.get_device_name(0)}")
-        return "cuda"
-    print("[Device] ใช้ CPU")
-    return "cpu"
+        device = "cuda"
+        print("[SYSTEM] ใช้ NVIDIA GPU (CUDA)")
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        print("[SYSTEM] ใช้ Apple Silicon GPU (MPS)")
+    else:
+        device = "cpu"
+        print("[SYSTEM] ใช้ CPU (ธรรมดา)")
+    model = YOLO(Config.YOLO_MODEL).to(device)
+    cap = cv2.VideoCapture(Config.CAMERA_SOURCE)
+    person_tracker = tracker.PersonTracker()
+    
+    cv2.namedWindow("Alzheimer Monitoring")
+    cv2.setMouseCallback("Alzheimer Monitoring", on_mouse)
 
-
-def main() -> None:
-    print("=" * 45)
-    print("  ระบบแจ้งเตือนผู้ป่วยอัลไซเมอร์")
-    print("=" * 45)
-
-    init_db()
-    print("[DB] ฐานข้อมูลพร้อมแล้ว")
-
-    device = get_device()
-
-    # โหลด YOLO ครั้งเดียว ไม่โหลดซ้ำทุกเฟรม
-    model = YOLO(YOLO_MODEL)
-    model.to(device)
-    print(f"[AI] โหลด {YOLO_MODEL} สำเร็จ -> device={device}")
-
-    cap = cv2.VideoCapture(CAMERA_SOURCE)
-    if not cap.isOpened():
-        print(f"[ERROR] ไม่สามารถเปิดกล้อง {CAMERA_SOURCE} ได้")
-        return
-
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[Camera] เปิดกล้อง {CAMERA_SOURCE} สำเร็จ — {width}x{height}")
-    print("กด Q เพื่อหยุดโปรแกรม\n")
-
-    cv2.namedWindow("Alzheimer Monitor", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Alzheimer Monitor", 960, 540)
-
-    # ── Main Loop ────────────────────────────────────────
-    tracker     = PersonTracker()
-    frame_count = 0
-
-    while True:
+    while cap.isOpened():
         ret, frame = cap.read()
+        if not ret: break
 
-        if not ret:
-            print("[INFO] วิดีโอจบหรือกล้องหลุด")
-            break
+        results = model.track(frame, persist=True, classes=[0], verbose=False)
 
-        frame_count += 1
+        # --- 1. เช็คสถานะก่อนว่ามีใครอยู่นอกเขตบ้างไหม (เพื่อเลือกสี Zone) ---
+        is_anyone_out = any(person_tracker.timers.values())
+        zone_color = (0, 0, 255) if is_anyone_out else (0, 255, 0) # แดง=มีคนออก, เขียว=ปกติ
 
-        # ข้ามเฟรมเพื่อลด CPU load
-        if frame_count % ANALYZE_EVERY_N_FRAMES != 0:
-            cv2.imshow("Alzheimer Monitor", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-            continue
+        # --- 2. วาด Safe Zone ลงใน frame ทันที (เพื่อให้ติดไปในรูปเซฟด้วย) ---
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [Config.SAFE_ZONE_POLYGON], zone_color)
+        cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame) # ทำพื้นหลังโปร่งแสง
+        cv2.polylines(frame, [Config.SAFE_ZONE_POLYGON], True, zone_color, 3) # วาดเส้นขอบ
+        
+        label = "! OUT OF ZONE" if is_anyone_out else "SAFE ZONE"
+        cv2.putText(frame, label, (Config.SAFE_ZONE_POLYGON[0][0], Config.SAFE_ZONE_POLYGON[0][1]-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, zone_color, 2)
 
-        # ── ตรวจจับและติดตามคน ──────────────────────────
-        results = model.track(
-            frame,
-            conf=CONFIDENCE_THRESHOLD,
-            classes=[0],
-            persist=True,
-            tracker="bytetrack.yaml",
-            verbose=False,
-            device=device,
-        )
+        # --- 3. ตรวจสอบรายบุคคล ---
+        if results[0].boxes.id is not None:
+            boxes = results[0].boxes.xyxy.cpu().numpy()
+            ids = results[0].boxes.id.cpu().numpy().astype(int)
+            confs = results[0].boxes.conf.cpu().numpy()
+            
+            for box, tid, conf in zip(boxes, ids, confs):
+                # หาจุดเท้า
+                fx, fy = (box[0] + box[2]) / 2, box[3]
+                
+                is_out = geofencing.is_outside(fx, fy)
+                duration = person_tracker.update(tid, is_out)
 
-        detections: list[tuple] = []
-        active_ids: set[int]    = set()
+                # วาดกรอบคน
+                color = (0, 0, 255) if is_out else (0, 255, 0)
+                cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), color, 2)
+                cv2.putText(frame, f"ID:{tid} {duration:.1f}s", (int(box[0]), int(box[1]-10)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # --- 4. เงื่อนไขการแจ้งเตือนและการเซฟรูป ---
+                if duration >= Config.ALERT_DURATION:
+                    # สำคัญ: ต้องเช็ค can_send เพื่อไม่ให้เซฟรูปรัวๆ
+                    if notifier.can_send(tid): 
+                        img_path = f"alert_{tid}_{int(time.time())}.jpg"
+                        
+                        # เซฟ frame ที่วาด Zone เรียบร้อยแล้ว
+                        cv2.imwrite(img_path, frame) 
+                        
+                        database.save_event(tid, "OUT_OF_ZONE", duration, conf, img_path)
+                        notifier.send_alert_async(tid, duration, conf, img_path)
 
-        for result in results:
-            if result.boxes is None:
-                continue
+        # --- 5. แสดงผลหน้าจอ ---
+        cv2.imshow("Alzheimer Monitoring", frame)
 
-            for box in result.boxes:
-                if box.id is None:
-                    continue
-
-                track_id        = int(box.id[0])
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                conf            = float(box.conf[0])
-
-                active_ids.add(track_id)
-                detections.append((track_id, x1, y1, x2, y2, conf))
-
-                foot_x = (x1 + x2) / 2
-                foot_y = y2
-
-                is_out   = is_outside_safe_zone(foot_x, foot_y)
-                duration = tracker.update(track_id, is_out)
-
-                # ── แจ้งเตือน ────────────────────────────
-                if duration is not None:
-                    print(
-                        f"[ALERT] ID={track_id} นอก zone "
-                        f"{duration:.1f} วิ conf={conf:.0%}"
-                    )
-
-                    if can_send_alert(track_id):
-                        _last_alert_time[track_id] = time.time()
-
-                        img_path = f"alert_{track_id}_{int(time.time())}.jpg"
-                        preview  = draw_overlay(
-                            frame, detections, tracker.get_outside_info()
-                        )
-                        cv2.imwrite(img_path, preview)
-                        save_event(track_id, "OUT_OF_ZONE", duration, conf, img_path)
-                        send_line_notify(track_id, duration, conf, img_path)
-                    else:
-                        print(f"[COOLDOWN] ID={track_id} รอ cooldown อยู่")
-
-        tracker.cleanup_lost_tracks(active_ids)
-
-        annotated = draw_overlay(
-            frame, detections, tracker.get_outside_info()
-        )
-        cv2.imshow("Alzheimer Monitor", annotated)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
 
     cap.release()
     cv2.destroyAllWindows()
-    print("\nระบบหยุดทำงานแล้ว")
-
 
 if __name__ == "__main__":
     main()

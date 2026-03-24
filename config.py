@@ -1,62 +1,29 @@
-"""
-config.py — ค่าตั้งต้นของระบบทั้งหมด
-
-ทำไมต้องแยกไฟล์นี้ออกมา?
-- แก้ค่าที่นี่ที่เดียว ไม่ต้องไล่หาในทุกไฟล์
-- ป้องกันการ hardcode ค่าซ้ำในหลายที่
-- ง่ายต่อการ test และ deploy คนละ environment
-"""
-
 import os
 import numpy as np
 from dotenv import load_dotenv
 
-# โหลด .env ก่อนเสมอ เพื่อให้ os.getenv() ดึงค่าได้
-# ทำไมใช้ .env แทนการเขียนตรงๆ? → ป้องกัน token หลุดขึ้น GitHub
 load_dotenv()
 
-# ─── LINE ──────────────────────────────────────────────
-# ดึงจาก .env ไม่เขียน token ตรงๆ ในโค้ด
-LINE_NOTIFY_TOKEN: str = os.getenv("LINE_NOTIFY_TOKEN", "")
-
-# ─── กล้อง ─────────────────────────────────────────────
-# 0 = webcam ตัวแรก, 1 = ตัวที่สอง
-# หรือ URL เช่น "rtsp://192.168.1.10:554/stream"
-CAMERA_SOURCE = "video/a.mp4"  # เปลี่ยนเป็น 0 หรือ URL ตามต้องการ
-
-# ─── AI ────────────────────────────────────────────────
-# ความมั่นใจขั้นต่ำ 0.0–1.0
-# เพิ่มถ้า false alarm บ่อย, ลดถ้าตรวจจับพลาด
-CONFIDENCE_THRESHOLD: float = 0.6
-
-# ทำไมใช้ yolov8n-pose?
-# n = nano → เร็วสุด รันบน CPU/MPS ได้สบาย
-# pose → ได้ keypoint ข้อต่อร่างกาย 17 จุดด้วย
-YOLO_MODEL: str = "yolov8n-pose.pt"
-
-# ─── Geofencing ────────────────────────────────────────
-# ทำไมต้องรอ 4 วินาที?
-# คนที่เดินผ่านปกติจะอยู่นอก zone < 2 วินาที
-# ผู้ป่วยที่หลงออกไปจะอยู่นานกว่านั้น
-ALERT_DURATION_SECONDS: float = 4.0
-
-# พิกัด pixel ของพื้นที่ปลอดภัย (ปรับตามกล้องจริง)
-# รูปแบบ: [x, y] เรียงตามเข็มนาฬิกา
-# ทำไมเป็น np.int32? → OpenCV กำหนดว่า pointPolygonTest ต้องการแบบนี้
-SAFE_ZONE_POLYGON =  np.array([(200, 136),(207, 339),(739, 341),(709, 140)]).astype(np.int32)
-
-# ─── แจ้งเตือน ─────────────────────────────────────────
-# รอกี่วินาทีก่อนส่ง LINE ซ้ำ
-# ทำไม 30 วินาที? → ป้องกัน LINE ท่วม แต่ยังแจ้งเตือนถี่พอ
-COOLDOWN_SECONDS: int = 30
-
-# ─── ฐานข้อมูล ─────────────────────────────────────────
-# ทำไมใช้ SQLite ไม่ใช้ MySQL?
-# SQLite = ไฟล์เดียว ไม่ต้องรัน server แยก เหมาะกับโปรเจกต์ขนาดเล็ก
-DB_PATH: str = "alzheimer_events.db"
-
-# ─── ประสิทธิภาพ ────────────────────────────────────────
-# วิเคราะห์ทุกกี่เฟรม
-# 3 = วิเคราะห์ 1 ใน 3 เฟรม → ประหยัด CPU 66%
-# กล้อง 30fps → วิเคราะห์จริง 10 ครั้ง/วินาที ซึ่งพอสำหรับคนเดิน
-ANALYZE_EVERY_N_FRAMES: int = 3
+class Config:
+    # --- กล้องและโมเดล ---
+    # เปลี่ยนเป็น 0 สำหรับ Webcam หรือใส่พาธ "video/a.mp4" ตามในโฟลเดอร์คุณ
+    CAMERA_SOURCE = "video/a.mp4" 
+    YOLO_MODEL = "yolov8n.pt" 
+    CONF_THRESHOLD = 0.5
+    
+    # --- พื้นที่ปลอดภัย (Safe Zone) ---
+    # ปรับพิกัด [x, y] ตามพื้นที่จริง (เรียงตามเข็มนาฬิกา)
+    SAFE_ZONE_POLYGON = np.array([
+        (100, 100), (540, 100), (540, 380), (100, 380)
+    ], np.int32)
+    
+    # --- เงื่อนไขการแจ้งเตือน ---
+    ALERT_DURATION = 4.0   # อยู่นอกเขตนาน 4 วินาทีถึงจะเตือน
+    COOLDOWN = 30          # พักการเตือน 30 วินาทีหลังส่งเมลไปแล้ว
+    
+    # --- อีเมล (ดึงค่าจากไฟล์ .env) ---
+    SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+    EMAIL_USER = os.getenv("EMAIL_USER", "")
+    EMAIL_PASS = os.getenv("EMAIL_PASS", "")
+    EMAIL_TO = os.getenv("EMAIL_TO", "")

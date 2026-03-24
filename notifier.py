@@ -1,136 +1,55 @@
-"""
-notifier.py — ส่งแจ้งเตือนผ่าน Email (SMTP)
-
-ทำไมเปลี่ยนจาก LINE Notify มา Email?
-- LINE Notify ประกาศปิดบริการ (ใช้ไม่ได้อีกต่อไป)
-- Email ใช้ได้ทุก provider เช่น Gmail, Outlook, Yahoo
-- ส่งได้ทั้งข้อความและภาพแนบในคราวเดียว
-- ไม่มีข้อจำกัดจำนวนครั้งส่ง
-
-ทำไมใช้ smtplib?
-- มาพร้อมกับ Python ไม่ต้อง pip install เพิ่ม
-- รองรับทุก email provider ที่มี SMTP server
-"""
-
 import smtplib
+import threading
 import time
 import os
-import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
-from datetime import datetime
-from dotenv import load_dotenv
+from config import Config
 
-load_dotenv()
+# ตัวแปรสำหรับเก็บเวลาล่าสุดที่ส่งแจ้งเตือนแยกตาม ID
+_last_alert = {}
 
-# ดึงค่าจาก .env
-SMTP_HOST: str  = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT: int  = int(os.getenv("SMTP_PORT", "587"))
-EMAIL_USER: str = os.getenv("EMAIL_USER", "")   # อีเมลผู้ส่ง
-EMAIL_PASS: str = os.getenv("EMAIL_PASS", "")   # App Password
-EMAIL_TO: str   = os.getenv("EMAIL_TO", "")     # อีเมลผู้รับ (ผู้ดูแล)
-
-from config import COOLDOWN_SECONDS
-
-# cooldown แยกตาม track_id เหมือนเดิม
-_last_alert_time: dict[int, float] = {}
-
-
-def can_send_alert(track_id: int) -> bool:
-    """ตรวจสอบว่าผ่าน cooldown แล้วหรือยัง"""
-    last = _last_alert_time.get(track_id, 0)
-    return (time.time() - last) > COOLDOWN_SECONDS
-
-
-def send_email_notify(
-    track_id: int,
-    duration: float,
-    confidence: float,
-    image_path: str = None,
-) -> bool:
+def can_send(tid):
+    """ 
+    ฟังก์ชันเช็คว่าผ่านช่วงเวลา Cooldown หรือยัง 
+    คืนค่า True ถ้าส่งได้, False ถ้ายังติด Cooldown
     """
-    ส่ง Email แจ้งเตือนพร้อมภาพแนบ
+    now = time.time()
+    # ถ้ายังไม่เคยส่งเลย หรือ ส่งครั้งล่าสุดนานเกินค่า COOLDOWN ใน config แล้ว
+    if tid not in _last_alert or (now - _last_alert[tid]) > Config.COOLDOWN:
+        return True
+    return False
 
-    ทำไมใช้ MIMEMultipart?
-    -> ทำให้ส่งได้ทั้งข้อความและไฟล์แนบในเมลเดียว
-       ถ้าใช้ MIMEText อย่างเดียวจะแนบไฟล์ไม่ได้
+def send_alert_async(tid, duration, conf, img_path):
+    """ ฟังก์ชันส่งอีเมลแบบเบื้องหลัง (Background) """
+    
+    # อัปเดตเวลาล่าสุดที่ส่งทันที
+    _last_alert[tid] = time.time()
 
-    ทำไมใช้ port 587?
-    -> เป็น port มาตรฐานสำหรับ STARTTLS (TLS แบบ upgrade)
-       ปลอดภัยกว่า port 25 และใช้ได้กับ Gmail, Outlook ฯลฯ
-    """
-    if not all([EMAIL_USER, EMAIL_PASS, EMAIL_TO]):
-        print("[Email] ไม่พบข้อมูล email — ตรวจสอบไฟล์ .env")
-        return False
-
-    if not can_send_alert(track_id):
-        return False
-
-    # อัปเดต cooldown ทันที ก่อนส่ง thread
-    # ทำไมอัปเดตก่อน?
-    # → ถ้าอัปเดตใน thread อาจส่งซ้ำได้ถ้า thread ยังไม่ทัน update
-    _last_alert_time[track_id] = time.time()
-
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # สร้าง Email
-    msg = MIMEMultipart()
-    msg["From"]    = EMAIL_USER
-    msg["To"]      = EMAIL_TO
-    msg["Subject"] = f"แจ้งเตือน: ผู้ป่วยออกนอกพื้นที่ [{now_str}]"
-
-    body = f"""
-    <h2 style="color:#c0392b;">แจ้งเตือน: ผู้ป่วยออกนอกพื้นที่!</h2>
-    <table style="font-size:15px;line-height:2">
-      <tr><td><b>เวลา</b></td><td>{now_str}</td></tr>
-      <tr><td><b>Track ID</b></td><td>{track_id}</td></tr>
-      <tr><td><b>อยู่นอกพื้นที่นาน</b></td><td>{duration:.1f} วินาที</td></tr>
-      <tr><td><b>ความมั่นใจ AI</b></td><td>{confidence:.0%}</td></tr>
-    </table>
-    <p style="color:#7f8c8d;font-size:13px;">
-      ข้อความนี้ส่งโดยระบบแจ้งเตือนผู้ป่วยอัลไซเมอร์อัตโนมัติ
-    </p>
-    """
-    msg.attach(MIMEText(body, "html", "utf-8"))
-
-    if image_path:
+    def task():
         try:
-            with open(image_path, "rb") as f:
-                img_data = f.read()
-            image = MIMEImage(img_data, name=os.path.basename(image_path))
-            msg.attach(image)
-        except FileNotFoundError:
-            pass
+            if not Config.EMAIL_USER or not Config.EMAIL_PASS:
+                return
 
-    def _send(msg_str: str) -> None:
-        """
-        ส่ง email ใน background thread
-        ทำไมใช้ thread แยก?
-        → การส่ง email ใช้เวลา 1-10 วินาที
-          ถ้ารันใน main loop จะทำให้ภาพกล้องค้างระหว่างส่ง
-          thread แยกทำให้กล้องทำงานต่อได้ทันที
-        """
-        try:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            msg = MIMEMultipart()
+            msg["Subject"] = f"⚠️ ALERT: ผู้ป่วยออกนอกพื้นที่ (ID: {tid})"
+            msg["From"] = Config.EMAIL_USER
+            msg["To"] = Config.EMAIL_TO
+            
+            body = f"ตรวจพบผู้ป่วยออกนอกพื้นที่ปลอดภัย\nID: {tid}\nระยะเวลา: {duration:.1f} วินาที\nความแม่นยำ: {conf:.0%}"
+            msg.attach(MIMEText(body, 'plain'))
+
+            if os.path.exists(img_path):
+                with open(img_path, 'rb') as f:
+                    msg.attach(MIMEImage(f.read(), name="alert.jpg"))
+
+            with smtplib.SMTP(Config.SMTP_HOST, Config.SMTP_PORT) as server:
                 server.starttls()
-                server.login(EMAIL_USER, EMAIL_PASS)
-                server.sendmail(EMAIL_USER, EMAIL_TO, msg_str)
-            print(f"[Email] ส่งแจ้งเตือน ID={track_id} สำเร็จ -> {EMAIL_TO}")
-        except smtplib.SMTPAuthenticationError:
-            print("[Email] Login ไม่สำเร็จ — ตรวจสอบ EMAIL_USER และ EMAIL_PASS")
-        except smtplib.SMTPException as e:
-            print(f"[Email] SMTP Error: {e}")
+                server.login(Config.EMAIL_USER, Config.EMAIL_PASS)
+                server.sendmail(Config.EMAIL_USER, Config.EMAIL_TO, msg.as_string())
+            print(f"📧 ส่งอีเมลแจ้งเตือนสำเร็จสำหรับ ID {tid}")
         except Exception as e:
-            print(f"[Email] Error: {e}")
+            print(f"Mail Error: {e}")
 
-    # รัน _send ใน thread แยก
-    # daemon=True = thread ปิดตามเมื่อโปรแกรมหลักปิด
-    t = threading.Thread(target=_send, args=(msg.as_string(),), daemon=True)
-    t.start()
-    print(f"[Email] กำลังส่งแจ้งเตือน ID={track_id} (background)...")
-    return True
-
-
-# alias ให้ main.py เรียกชื่อเดิมได้ ไม่ต้องแก้ main.py
-send_line_notify = send_email_notify
+    threading.Thread(target=task, daemon=True).start()
