@@ -1,108 +1,79 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "../api/base44Client";
-import AlertItem from "../components/alerts/AlertItem";
-import { Bell, Filter, CheckCheck, Trash2 } from "lucide-react";
-
-const STATUS_OPTS = [
-  { value: "", label: "ทั้งหมด" },
-  { value: "new", label: "ใหม่" },
-  { value: "acknowledged", label: "รับทราบแล้ว" },
-  { value: "resolved", label: "แก้ไขแล้ว" },
-];
-
-const EVENT_OPTS = [
-  { value: "", label: "ทุกประเภท" },
-  { value: "out_of_zone", label: "ออกนอกพื้นที่" },
-  { value: "fall_detected", label: "ตรวจจับการล้ม" },
-  { value: "prolonged_standing", label: "ยืนนานผิดปกติ" },
-];
+import { useState, useEffect } from "react";
+import { localStore } from "../api/localStore";
+import { AlertCircle, Trash2, Bell, Filter, ChevronDown, CheckCircle } from "lucide-react";
 
 export default function Alerts() {
-  const qc = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("");
-  const [eventFilter, setEventFilter] = useState("");
+  const [alerts, setAlerts] = useState([]);
 
-  const { data: alerts = [], isLoading } = useQuery({
-    queryKey: ["alerts"],
-    queryFn: () => base44.entities.Alert.list("-created_date", 100),
-    refetchInterval: 10000,
-  });
+  useEffect(() => {
+    setAlerts(localStore.alerts.list());
+  }, []);
 
-  const acknowledgeAll = async () => {
-    const newOnes = alerts.filter(a => a.status === "new");
-    await Promise.all(newOnes.map(a => base44.entities.Alert.update(a.id, { status: "acknowledged" })));
-    qc.invalidateQueries({ queryKey: ["alerts"] });
-    qc.invalidateQueries({ queryKey: ["alerts-unread"] });
+  const deleteAlert = (id) => {
+    localStore.alerts.remove(id);
+    setAlerts(localStore.alerts.list());
   };
 
-  const filtered = alerts.filter(a => {
-    const matchStatus = !statusFilter || a.status === statusFilter;
-    const matchEvent = !eventFilter || a.event_type === eventFilter;
-    return matchStatus && matchEvent;
-  });
-
-  const newCount = alerts.filter(a => a.status === "new").length;
-
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500">
+      <div className="flex justify-between items-end">
         <div>
-          <h1 className="text-xl font-semibold text-foreground">การแจ้งเตือน</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {newCount > 0 ? `${newCount} รายการใหม่ที่รอรับทราบ` : "ไม่มีรายการใหม่"}
-          </p>
+          <h1 className="text-2xl font-black text-slate-900">การแจ้งเตือน</h1>
+          <p className="text-slate-500 text-sm mt-1">รายการเหตุการณ์ความปลอดภัยย้อนหลัง</p>
         </div>
-        {newCount > 0 && (
-          <button
-            onClick={acknowledgeAll}
-            className="flex items-center gap-2 px-4 py-2 text-sm border border-border rounded-lg hover:bg-secondary transition-colors"
-          >
-            <CheckCheck size={15} /> รับทราบทั้งหมด
-          </button>
+        <button onClick={() => { localStorage.setItem("local_alerts", "[]"); setAlerts([]); }} className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors">ล้างทั้งหมด</button>
+      </div>
+
+      <div className="flex items-center gap-3 bg-white p-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-600 shadow-sm overflow-x-auto">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border">
+          <Filter size={14}/> <span>กรองโดย:</span>
+        </div>
+        <button className="flex items-center gap-1.5 px-4 py-1.5 bg-white border rounded-lg">ทั้งหมด <ChevronDown size={14}/></button>
+        <button className="flex items-center gap-1.5 px-4 py-1.5 bg-white border rounded-lg">ทุกประเภท <ChevronDown size={14}/></button>
+        <span className="ml-auto text-slate-300 font-medium px-2">{alerts.length} รายการ</span>
+      </div>
+
+      <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm shadow-slate-100">
+        {alerts.length > 0 ? (
+          <div className="divide-y border-slate-50">
+            {alerts.map((a) => (
+              <div key={a.id} className="p-5 flex items-center justify-between group hover:bg-slate-50 transition-all">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center border border-red-100">
+                    <AlertCircle size={24} />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                       <h4 className="font-bold text-slate-900 text-lg tracking-tight">ออกนอกพื้นที่ปลอดภัย</h4>
+                       <span className="bg-yellow-100 text-yellow-700 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest">รับทราบ</span>
+                    </div>
+                    <p className="text-xs text-slate-500 flex items-center gap-3">
+                      <span className="flex items-center gap-1">📷 {a.location || "กล้องหลัก"}</span>
+                      <span className="flex items-center gap-1 font-bold text-blue-500">🕒 {a.time}</span>
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => deleteAlert(a.id)} 
+                  className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 size={20} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-24 text-center space-y-4">
+            <div className="w-20 h-20 bg-slate-50 text-slate-100 rounded-full flex items-center justify-center mx-auto border-2 border-dashed border-slate-200">
+              <Bell size={40} />
+            </div>
+            <div className="space-y-1">
+              <p className="font-black text-slate-900 uppercase text-lg tracking-tighter">ไม่มีรายการแจ้งเตือน</p>
+              <p className="text-sm text-slate-400 font-medium">ระบบกำลังเฝ้าระวังและทุกอย่างยังปกติดี</p>
+            </div>
+          </div>
         )}
       </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <div className="flex items-center gap-2">
-          <Filter size={14} className="text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">กรองโดย:</span>
-        </div>
-        <select
-          value={statusFilter}
-          onChange={e => setStatusFilter(e.target.value)}
-          className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-        >
-          {STATUS_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <select
-          value={eventFilter}
-          onChange={e => setEventFilter(e.target.value)}
-          className="px-3 py-1.5 bg-white border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-        >
-          {EVENT_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <span className="text-xs text-muted-foreground ml-auto">{filtered.length} รายการ</span>
-      </div>
-
-      {/* List */}
-      {isLoading ? (
-        <div className="space-y-2">
-          {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-16 bg-white rounded-xl border border-border animate-pulse" />)}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-xl border border-border flex flex-col items-center py-16 gap-3">
-          <Bell size={36} className="text-muted-foreground opacity-30" />
-          <p className="text-sm text-muted-foreground">ไม่มีการแจ้งเตือนที่ตรงกับเงื่อนไข</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map(alert => (
-            <AlertItem key={alert.id} alert={alert} />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

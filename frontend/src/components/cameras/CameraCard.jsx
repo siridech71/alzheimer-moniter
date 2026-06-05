@@ -1,86 +1,47 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Camera, Settings, Play, Square, AlertTriangle, MapPin } from "lucide-react";
-import StatusBadge from "../../components/ui/StatusBadge";
+import { Camera, Settings, Trash2, Video } from "lucide-react";
+import { localStore } from "../../api/localStore";
 
-import { cn } from "../../lib/utils";
-
-const API_BASE = "http://localhost:8001/api";
-
-export default function CameraCard({ camera, alertCount = 0, onStatusChange }) {
-  const [imgError, setImgError] = useState(false);
-
+export default function CameraCard({ camera, onLiveView, onDelete }) {
   return (
-    <div className="bg-white rounded-xl border border-border shadow-sm overflow-hidden hover:shadow-md transition-shadow group">
-      {/* Video preview area */}
-      <div className="relative aspect-video bg-slate-900 flex items-center justify-center overflow-hidden">
-        {camera.status === "live" && !imgError ? (
-          <img
-            src={`${API_BASE}/video-feed?camera_id=${camera.id}&t=${Date.now()}`}
-            className="w-full h-full object-cover"
-            alt="Live feed"
-            onError={() => setImgError(true)}
-          />
-        ) : camera.thumbnail_url && !imgError ? (
-          <img
-            src={camera.thumbnail_url}
-            className="w-full h-full object-cover opacity-80"
-            alt="Thumbnail"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <div className="flex flex-col items-center gap-2 opacity-40">
-            <Camera size={32} className="text-slate-400" />
-            <span className="text-xs text-slate-400">{camera.name}</span>
-          </div>
-        )}
-
-        {/* Overlay badges */}
-        <div className="absolute top-2 left-2">
-          <StatusBadge status={camera.status || "standby"} />
+    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm flex flex-col group relative">
+      {/* ส่วนบน (วิดีโอ/สถานะ) */}
+      <div className="aspect-video bg-[#1e2330] relative flex items-center justify-center group-hover:bg-[#161a24] transition-colors cursor-pointer" onClick={() => onLiveView(camera)}>
+        <div className="absolute top-3 left-3 bg-white/90 backdrop-blur text-slate-700 text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full"></span> STANDBY
         </div>
-
-        {alertCount > 0 && (
-          <div className="absolute top-2 right-2 flex items-center gap-1 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">
-            <AlertTriangle size={11} />
-            {alertCount}
-          </div>
-        )}
-
-        {/* Hover overlay */}
-        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-          <Link
-            to={`/cameras/${camera.id}`}
-            className="px-4 py-2 bg-white/90 text-foreground text-sm font-medium rounded-lg hover:bg-white transition-colors"
-          >
-            จัดการกล้อง
-          </Link>
+        
+        {/* ปุ่มจัดการโผล่ตอน Hover */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/20">
+           <button className="bg-white text-slate-800 px-4 py-2 rounded-lg font-bold text-sm shadow-lg flex items-center gap-2">
+             <Video size={16}/> ดูภาพสด
+           </button>
+        </div>
+        
+        <div className="text-center text-slate-500 group-hover:opacity-0 transition-opacity">
+          <Camera size={32} className="mx-auto mb-2 opacity-50" />
+          <p className="text-sm font-medium">{camera.name}</p>
         </div>
       </div>
 
-      {/* Info */}
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="font-semibold text-sm text-foreground truncate">{camera.name}</h3>
-            {camera.location && (
-              <div className="flex items-center gap-1 mt-0.5">
-                <MapPin size={11} className="text-muted-foreground flex-shrink-0" />
-                <span className="text-xs text-muted-foreground truncate">{camera.location}</span>
-              </div>
-            )}
-          </div>
-          <Link
-            to={`/cameras/${camera.id}`}
-            className="flex-shrink-0 p-1.5 rounded-lg hover:bg-secondary transition-colors text-muted-foreground"
-          >
-            <Settings size={14} />
-          </Link>
+      {/* ส่วนล่าง (ข้อมูล) */}
+      <div className="p-4 flex justify-between items-start">
+        <div>
+          <h3 className="font-bold text-slate-800">{camera.name}</h3>
+          <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
+            📍 {camera.source}
+          </p>
+          <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+            📧 {camera.email_to || "ไม่ได้ตั้งค่าอีเมล"}
+          </p>
         </div>
-
-        {camera.alert_email && (
-          <p className="mt-2 text-xs text-muted-foreground truncate">📧 {camera.alert_email}</p>
-        )}
+        <div className="flex gap-1">
+          <button onClick={() => onDelete(camera.id)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+            <Trash2 size={16} />
+          </button>
+          <button className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+            <Settings size={16} />
+          </button>
+        </div>
       </div>
     </div>
   );

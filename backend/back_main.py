@@ -1,189 +1,171 @@
-import os
-import cv2
-import torch
-import numpy as np
-import asyncio
-import time
-import asyncpg
-import json
-import threading
-import uuid
-import logging
-import smtplib
+import os, cv2, torch, numpy as np, asyncio, time, smtplib, threading, psycopg2
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
-from pathlib import Path
-from datetime import datetime
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse, Response
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
 from ultralytics import YOLO
 from dotenv import load_dotenv
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv()
+app = FastAPI()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+origins = os.getenv("CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-IMAGE_DIR = ROOT_DIR / "alert_images"
-IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---- Email Config (Free via Gmail) ----
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SENDER_EMAIL = os.environ.get("SMTP_EMAIL")
-SENDER_PASSWORD = os.environ.get("SMTP_PASSWORD")
-
-def send_email_direct(to_email, camera_name, event_type, duration, confidence, image_path):
-    if not SENDER_EMAIL or not SENDER_PASSWORD:
-        logger.error("Email settings missing in .env")
-        return
-    
-    try:
-        subject = f"🚨 แจ้งเตือน: พบพฤติกรรมเสี่ยงจากกล้อง {camera_name}"
-        msg = MIMEMultipart()
-        msg['From'] = f"Alzheimer Guard <{SENDER_EMAIL}>"
-        msg['To'] = to_email
-        msg['Subject'] = subject
-
-        body = f"""
-        <html>
-            <body>
-                <h2 style='color: #d32f2f;'>🚨 ตรวจพบพฤติกรรมเสี่ยง</h2>
-                <p><b>เหตุการณ์:</b> {event_type}</p>
-                <p><b>กล้อง:</b> {camera_name}</p>
-                <p><b>เวลา:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                <p><b>ระยะเวลาที่อยู่นอกพื้นที่:</b> {duration:.1f} วินาที</p>
-                <p><b>ความมั่นใจ AI:</b> {confidence*100:.1f}%</p>
-                <p><i>กรุณาตรวจสอบและให้ความช่วยเหลือโดยเร็ว</i></p>
-            </body>
-        </html>
-        """
-        msg.attach(MIMEText(body, 'html'))
-
-        if image_path and os.path.exists(image_path):
-            with open(image_path, 'rb') as f:
-                img_data = f.read()
-                image = MIMEImage(img_data, name=os.path.basename(image_path))
-                msg.attach(image)
-
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
-        server.quit()
-        logger.info(f"✅ Email sent to {to_email}")
-    except Exception as e:
-        logger.error(f"❌ Email failed: {e}")
-
-# ---- Load YOLOv8 ----
-device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+device = "mps" if torch.backends.mps.is_available() else "cpu"
 model = YOLO("yolov8n.pt").to(device)
 
-# ---- Global State ----
-db_pool = None
-monitoring_sessions = {}
-latest_frames = {}
-pending_alerts = []
-acknowledged_uids = set()
+# --- Global States (ระบบใหม่) ---
+running_monitors = {} 
+latest_frames = {}    
+current_alerts = [] 
 
-# ============================================================
-# Monitoring Loop
-# ============================================================
+def log_to_db(location):
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME_PG")
+        )
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO alerts (event_type, location, alert_time) VALUES (%s, %s, %s)",
+            ("ออกนอกพื้นที่", location, datetime.now())
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"💾 บันทึกแจ้งเตือน [{location}] ลง PostgreSQL สำเร็จ")
+    except Exception as e:
+        print(f"❌ DB Error: {e}")
 
-async def monitoring_loop(camera_id, camera_name, source, safe_zone, email_to, confidence_threshold, alert_delay):
-    global latest_frames
+def send_alert_email(to_email, frame):
+    sender = os.getenv("GMAIL_EMAIL")
+    pw = os.getenv("GMAIL_APP_PASSWORD")
+    if not sender or not pw or not to_email: return
+    try:
+        msg = MIMEMultipart()
+        msg['From'], msg['To'] = sender, to_email
+        msg['Subject'] = f"⚠️ [Alzheimer Guard] แจ้งเตือน: พบคนออกนอกเขต ({datetime.now().strftime('%H:%M:%S')})"
+        body = f"พบคนอยู่นอกเขตปลอดภัยเกิน 4 วินาที\nเวลา: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        msg.attach(MIMEText(body, 'plain'))
+        _, buffer = cv2.imencode('.jpg', frame)
+        msg.attach(MIMEImage(buffer.tobytes(), name="alert.jpg"))
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender, pw)
+            server.send_message(msg)
+        print(f"📧 ส่งอีเมลแจ้งเตือนสำเร็จไปยัง: {to_email}")
+    except Exception as e: print(f"❌ SMTP Error: {e}")
+
+async def monitor_engine(cam_id, source, safe_zone, email):
+    global running_monitors, latest_frames, current_alerts
     src = int(source) if str(source).isdigit() else source
     cap = cv2.VideoCapture(src)
+    out_of_zone_start_time = 0
+    print(f"🚀 AI Engine Started: {cam_id}")
     
-    out_of_zone_start = 0
-    last_alert_time = 0
-    COOLDOWN = 30.0
-
-    while monitoring_sessions.get(camera_id, {}).get("active"):
+    while cam_id in running_monitors and running_monitors[cam_id]["active"]:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            if not str(source).isdigit(): cap.set(cv2.CAP_PROP_POS_FRAMES, 0); continue
+            else: break
 
-        results = model(frame, classes=[0], conf=confidence_threshold, verbose=False)
-        poly_pts = np.array(safe_zone, np.int32)
-        cv2.polylines(frame, [poly_pts], True, (0, 255, 0), 2)
-
-        person_out = False
-        max_conf = 0
-
-        for box in results[0].boxes:
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            conf = float(box.conf[0])
-            foot_pos = (float((x1+x2)/2), float(y2))
+        frame = cv2.resize(frame, (1280, 720))
+        if len(safe_zone) >= 3:
+            poly_pts = np.array(safe_zone, np.int32)
+            cv2.polylines(frame, [poly_pts], True, (0, 255, 0), 2)
+            results = model(frame, classes=[0], conf=0.5, verbose=False, device=device)
             
-            if cv2.pointPolygonTest(poly_pts, foot_pos, False) < 0:
-                person_out = True
-                max_conf = conf
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
-        
-        now = time.time()
-        if person_out:
-            if out_of_zone_start == 0: out_of_zone_start = now
-            elapsed = now - out_of_zone_start
-            if elapsed >= alert_delay and (now - last_alert_time) > COOLDOWN:
-                img_path = IMAGE_DIR / f"alert_{uuid.uuid4()}.jpg"
-                cv2.imwrite(str(img_path), frame)
-                
-                # ส่งเมลทันทีจาก Backend
-                if email_to:
-                    threading.Thread(target=send_email_direct, args=(
-                        email_to, camera_name, "ออกนอกพื้นที่ Safe Zone", elapsed, max_conf, str(img_path)
-                    )).start()
-                
-                last_alert_time = now
-        else:
-            out_of_zone_start = 0
+            person_is_outside = False
+            for box in results[0].boxes.xyxy.cpu().numpy():
+                foot = [(box[0] + box[2]) / 2, box[3]]
+                dist = cv2.pointPolygonTest(poly_pts, (float(foot[0]), float(foot[1])), False)
+                if dist < 0:
+                    person_is_outside = True
+                    cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 0, 255), 3)
+            
+            if person_is_outside:
+                if out_of_zone_start_time == 0: out_of_zone_start_time = time.time()
+                elapsed = time.time() - out_of_zone_start_time
+                if elapsed >= 4.0:
+                    threading.Thread(target=send_alert_email, args=(email, frame.copy())).start()
+                    threading.Thread(target=log_to_db, args=(f"กล้อง {cam_id}",)).start()
+                    current_alerts.append({"id": int(time.time()), "location": f"กล้อง {cam_id}", "time": datetime.now().strftime('%H:%M:%S')})
+                    out_of_zone_start_time = time.time() + 60 
+            else: out_of_zone_start_time = 0
 
-        _, buffer = cv2.imencode('.jpg', frame)
-        latest_frames[camera_id] = buffer.tobytes()
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        latest_frames[cam_id] = buffer.tobytes()
         await asyncio.sleep(0.01)
 
     cap.release()
+    if cam_id in latest_frames: del latest_frames[cam_id]
+    print(f"🛑 Engine Stopped: {cam_id}")
 
-# ============================================================
-# FastAPI App
-# ============================================================
-class MonitoringRequest(BaseModel):
-    camera_id: str
-    camera_name: str = "Camera"
-    camera_source: str
-    safe_zone: List[List[int]]
-    email_to: str
-    confidence_threshold: float = 0.6
-    alert_delay_seconds: float = 4.0
+@app.post("/api/sync-cameras")
+async def sync_cameras(req: dict):
+    global running_monitors
+    cameras = req.get("cameras", [])
+    active_ids = [str(c['id']) for c in cameras]
     
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # 1. หยุดกล้องที่ถูกลบ
+    for old_id in list(running_monitors.keys()):
+        if old_id not in active_ids:
+            running_monitors[old_id]["active"] = False
 
-@app.post("/api/start-monitoring")
-async def start_monitoring(req: MonitoringRequest):
-    monitoring_sessions[req.camera_id] = {"active": True}
-    asyncio.create_task(monitoring_loop(
-        req.camera_id, req.camera_name, req.camera_source, 
-        req.safe_zone, req.email_to, req.confidence_threshold, req.alert_delay_seconds
-    ))
-    return {"status": "success"}
+    # 2. เริ่มกล้องใหม่
+    for cam in cameras:
+        cid = str(cam['id'])
+        if cid not in running_monitors or not running_monitors[cid]["active"]:
+            running_monitors[cid] = {"active": True}
+            asyncio.create_task(monitor_engine(cid, cam['source'], cam['safe_zone'], cam.get('email_to')))
+            
+    return {"status": "synced", "active_engines": list(running_monitors.keys())}
 
-@app.get("/api/video-feed")
-async def video_feed(camera_id: str):
-    async def generate():
-        while True:
-            frame = latest_frames.get(camera_id)
+@app.get("/api/video-feed/{cam_id}")
+async def video_feed(cam_id: str):
+    async def gen():
+        while cam_id in running_monitors and running_monitors[cam_id]["active"]:
+            frame = latest_frames.get(cam_id)
             if frame:
-                yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n'
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             await asyncio.sleep(0.05)
-    return StreamingResponse(generate(), media_type='multipart/x-mixed-replace; boundary=frame')
+    return StreamingResponse(gen(), media_type='multipart/x-mixed-replace; boundary=frame')
+
+@app.get("/api/get-latest-alerts")
+async def get_latest_alerts():
+    global current_alerts
+    data = list(current_alerts); current_alerts = []
+    return data
+
+@app.get("/api/get-thumbnail")
+async def get_thumb(source: str = None):
+    src_val = source if source else "0"
+    src = int(src_val) if str(src_val).isdigit() else src_val
+    cap = cv2.VideoCapture(src)
+    ret, frame = cap.read(); cap.release()
+    if not ret: return Response(status_code=400)
+    _, buf = cv2.imencode('.jpg', cv2.resize(frame, (1280, 720)))
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+# API สำหรับดึงภาพนิ่งล่าสุดเฟรมเดียว (สำหรับหน้า Dashboard)
+@app.get("/api/last-frame/{cam_id}")
+async def get_last_frame(cam_id: str):
+    if cam_id in latest_frames:
+        return Response(content=latest_frames[cam_id], media_type="image/jpeg")
+    return Response(status_code=404)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

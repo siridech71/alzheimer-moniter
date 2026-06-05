@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { handleAlertWebhook } from "../lib/alertWebhook";
+import { handleAlertWebhook } from "./alertWebhook";
 
 const BACKEND_URL_KEY = "backend_url";
 const POLL_INTERVAL = 3000; // poll ทุก 3 วินาที
