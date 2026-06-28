@@ -1,79 +1,115 @@
 import { useState, useEffect } from "react";
-import { localStore } from "../api/localStore";
-import { AlertCircle, Trash2, Bell, Filter, ChevronDown, CheckCircle } from "lucide-react";
+import { AlertCircle, Trash2, Filter, ChevronDown, ShieldCheck, BellRing } from "lucide-react";
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState([]);
 
   useEffect(() => {
-    setAlerts(localStore.alerts.list());
+    try {
+      const localAlerts = localStorage.getItem("local_alerts");
+      setAlerts(localAlerts ? JSON.parse(localAlerts) : []);
+    } catch (e) { console.error(e); }
   }, []);
 
-  const deleteAlert = (id) => {
-    localStore.alerts.remove(id);
-    setAlerts(localStore.alerts.list());
+  const handleClearAll = () => {
+    if (window.confirm("คุณต้องการล้างประวัติการแจ้งเตือนทั้งหมดใช่หรือไม่?")) {
+      localStorage.setItem("local_alerts", "[]");
+      setAlerts([]);
+    }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-between items-end">
-        <div>
-          <h1 className="text-2xl font-black text-slate-900">การแจ้งเตือน</h1>
-          <p className="text-slate-500 text-sm mt-1">รายการเหตุการณ์ความปลอดภัยย้อนหลัง</p>
+    <div className="w-full space-y-6 animate-in fade-in duration-500">
+      
+      {/* 🌟 Top Header Card: ดีไซน์ใหม่ให้กรอบโค้ดมนลอยเด่น */}
+      <div className="bg-white rounded-[2.5rem] border border-slate-200/60 p-6 md:p-8 shadow-xs w-full flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-orange-50 text-[#FF8A5C] rounded-2xl flex items-center justify-center border border-orange-100/30 shrink-0">
+            <BellRing size={22} className="animate-pulse" />
+          </div>
+          <div>
+            <h1 className="font-['Lexend'] text-2xl font-black text-[#0F1B3D] tracking-tight">การแจ้งเตือนและระบบบันทึก</h1>
+            <p className="font-['Sarabun'] text-slate-400 font-semibold text-xs mt-0.5">รายการเหตุการณ์ความปลอดภัยย้อนหลังสำหรับวิเคราะห์พฤติกรรมเสี่ยง</p>
+          </div>
         </div>
-        <button onClick={() => { localStorage.setItem("local_alerts", "[]"); setAlerts([]); }} className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors">ล้างทั้งหมด</button>
+        
+        <button 
+          onClick={handleClearAll} 
+          className="flex items-center justify-center gap-2 h-10 px-5 bg-red-50 text-red-500 hover:bg-red-100/70 active:scale-98 rounded-xl text-xs font-bold font-['Prompt'] transition-all self-start sm:self-center shrink-0 border border-red-100/30"
+        >
+          <Trash2 size={14} /> ล้างข้อมูลทั้งหมด
+        </button>
       </div>
 
-      <div className="flex items-center gap-3 bg-white p-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-600 shadow-sm overflow-x-auto">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border">
-          <Filter size={14}/> <span>กรองโดย:</span>
+      {/* Filter Toolbar Section */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-[1.8rem] border border-slate-200/60 text-xs font-bold text-slate-600 shadow-xs w-full">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 px-3.5 py-2 bg-[#FFFBF5] rounded-xl border border-slate-200/50 font-['Prompt'] text-slate-400">
+            <Filter size={13}/> <span>คัดกรอง:</span>
+          </div>
+          <button className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200/60 hover:border-slate-300 rounded-xl font-['Prompt'] text-[#0F1B3D] transition-colors shadow-2xs">
+            กล้องทั้งหมด <ChevronDown size={13} className="text-slate-400"/>
+          </button>
         </div>
-        <button className="flex items-center gap-1.5 px-4 py-1.5 bg-white border rounded-lg">ทั้งหมด <ChevronDown size={14}/></button>
-        <button className="flex items-center gap-1.5 px-4 py-1.5 bg-white border rounded-lg">ทุกประเภท <ChevronDown size={14}/></button>
-        <span className="ml-auto text-slate-300 font-medium px-2">{alerts.length} รายการ</span>
+        
+        <div className="font-['Prompt'] font-bold text-slate-400 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
+          ตรวจพบระบบบันทึก <span className="text-[#2D5DE8] text-sm font-mono font-black ml-1">{alerts.length}</span> รายการ
+        </div>
       </div>
 
-      <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm shadow-slate-100">
+      {/* 🌟 Content Area: อัปเกรดหน้าตาการแสดงผลให้ลื่นไหลสไตล์โมเดิร์น */}
+      <div className="bg-white rounded-[2.5rem] border border-slate-200/60 overflow-hidden shadow-xs w-full">
         {alerts.length > 0 ? (
-          <div className="divide-y border-slate-50">
+          <div className="divide-y divide-slate-100/70">
             {alerts.map((a) => (
-              <div key={a.id} className="p-5 flex items-center justify-between group hover:bg-slate-50 transition-all">
+              <div key={a.id} className="p-5 flex items-center justify-between group hover:bg-[#FFFBF5]/40 transition-all duration-300">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center border border-red-100">
-                    <AlertCircle size={24} />
+                  <div className="w-12 h-12 bg-orange-50 text-[#FF8A5C] rounded-2xl flex items-center justify-center border border-orange-100/50 shrink-0 shadow-2xs">
+                    <AlertCircle size={20} />
                   </div>
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                       <h4 className="font-bold text-slate-900 text-lg tracking-tight">ออกนอกพื้นที่ปลอดภัย</h4>
-                       <span className="bg-yellow-100 text-yellow-700 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest">รับทราบ</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                       <h4 className="font-['Prompt'] font-bold text-[#0F1B3D] text-base tracking-tight">ออกนอกพื้นที่ปลอดภัย</h4>
+                       <span className="bg-orange-100 text-[#FF8A5C] px-2.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider font-['Prompt']">ตรวจจับด้วย AI</span>
                     </div>
-                    <p className="text-xs text-slate-500 flex items-center gap-3">
-                      <span className="flex items-center gap-1">📷 {a.location || "กล้องหลัก"}</span>
-                      <span className="flex items-center gap-1 font-bold text-blue-500">🕒 {a.time}</span>
+                    <p className="text-xs text-slate-400 font-semibold flex flex-wrap items-center gap-x-4 gap-y-1 font-['Sarabun']">
+                      <span className="flex items-center gap-1">📷 ตำแหน่งกล้อง: <strong className="text-slate-600 font-['Prompt']">{a.location || "กล้องทดสอบ"}</strong></span>
+                      <span className="flex items-center gap-1 text-[#2D5DE8]/80">🕒 บันทึกเวลา: <strong className="text-[#2D5DE8] font-mono font-bold">{a.time}</strong></span>
                     </p>
                   </div>
                 </div>
+                
                 <button 
-                  onClick={() => deleteAlert(a.id)} 
-                  className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                  onClick={() => {
+                    const updated = alerts.filter(exist => exist.id !== a.id);
+                    localStorage.setItem("local_alerts", JSON.stringify(updated));
+                    setAlerts(updated);
+                  }} 
+                  className="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-200"
                 >
-                  <Trash2 size={20} />
+                  <Trash2 size={16} />
                 </button>
               </div>
             ))}
           </div>
         ) : (
-          <div className="p-24 text-center space-y-4">
-            <div className="w-20 h-20 bg-slate-50 text-slate-100 rounded-full flex items-center justify-center mx-auto border-2 border-dashed border-slate-200">
-              <Bell size={40} />
+          /* 🛡️ Empty State Premium: ดีไซน์จุดว่างเปล่าให้ดูสบายตา อบอุ่น และเป็นระเบียบ */
+          <div className="py-24 px-6 text-center space-y-4 w-full max-w-md mx-auto">
+            <div className="w-20 h-20 bg-gradient-to-tr from-blue-50 to-indigo-50 border border-blue-100/40 text-[#2D5DE8] rounded-[2rem] flex items-center justify-center mx-auto shadow-sm relative">
+              <ShieldCheck size={36} />
+              <span className="absolute top-1 right-1 w-3 h-3 bg-[#22C55E] rounded-full border-2 border-white animate-pulse"></span>
             </div>
-            <div className="space-y-1">
-              <p className="font-black text-slate-900 uppercase text-lg tracking-tighter">ไม่มีรายการแจ้งเตือน</p>
-              <p className="text-sm text-slate-400 font-medium">ระบบกำลังเฝ้าระวังและทุกอย่างยังปกติดี</p>
+            
+            <div className="space-y-1.5">
+              <p className="font-['Prompt'] font-bold text-[#0F1B3D] text-base tracking-tight">ระบบความปลอดภัยทำงานปกติ</p>
+              <p className="font-['Sarabun'] text-xs text-slate-400 font-medium leading-relaxed">
+                ขณะนี้ยังไม่มีการบันทึกเหตุการณ์ความเสี่ยง ปัญญาประดิษฐ์กำลังเฝ้าระวังและผู้ป่วยยังคงใช้ชีวิตอยู่ในเส้นพิกัดปลอดภัยครบล่วงร้อยเปอร์เซ็นต์
+              </p>
             </div>
           </div>
         )}
       </div>
+
     </div>
   );
 }
